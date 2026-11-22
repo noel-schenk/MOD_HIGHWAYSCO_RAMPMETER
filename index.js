@@ -163,7 +163,11 @@ module.exports = function activate(api) {
 
   api.overlay.addStyle(`
     .rm-panel {
-      width: 292px;
+      width: 284px;
+      max-width: calc(100vw - 24px);
+      box-sizing: border-box;
+      position: relative;
+      z-index: 50;
       padding: 10px 12px;
       border-radius: 14px;
       background: rgb(255 255 255 / 0.88);
@@ -342,7 +346,9 @@ module.exports = function activate(api) {
     }
     .rm-name-input {
       flex: 1;
+      width: 0;
       min-width: 0;
+      box-sizing: border-box;
       border: 1px solid rgb(28 29 24 / 0.18);
       background: rgb(255 255 255 / 0.78);
       color: #1c1d18;
@@ -771,6 +777,7 @@ module.exports = function activate(api) {
         <div class="rm-subhead">
           <input
             type="text"
+            size="1"
             class="rm-name-input"
             maxlength="24"
             placeholder="Ramp #${id}"
@@ -1144,97 +1151,161 @@ module.exports = function activate(api) {
     render: renderHud,
   });
 
+  function getUiExclusionRects(ctx) {
+    const elements = new Set();
+    if (mountedCard && mountedCard.isConnected) {
+      elements.add(mountedCard);
+    }
+    if (typeof document !== 'undefined' && typeof document.querySelectorAll === 'function') {
+      for (const el of document.querySelectorAll('.mod-panel')) {
+        elements.add(el);
+      }
+    }
+    if (elements.size === 0) return [];
+
+    const canvasRect =
+      ctx && ctx.canvas && typeof ctx.canvas.getBoundingClientRect === 'function'
+        ? ctx.canvas.getBoundingClientRect()
+        : { left: 0, top: 0 };
+
+    const rects = [];
+    for (const el of elements) {
+      if (typeof el.getBoundingClientRect !== 'function') continue;
+      const r = el.getBoundingClientRect();
+      if (!r || r.width <= 0 || r.height <= 0) continue;
+      rects.push({
+        left: r.left - canvasRect.left,
+        top: r.top - canvasRect.top,
+        right: r.right - canvasRect.left,
+        bottom: r.bottom - canvasRect.top,
+        width: r.width,
+        height: r.height,
+        viewLeft: r.left,
+        viewTop: r.top,
+        viewRight: r.right,
+        viewBottom: r.bottom,
+      });
+    }
+    return rects;
+  }
+
   // World-space beacon & stop bar overlay for every detected on-ramp meter
-  api.overlay.registerLayer('beacons', ({ ctx, worldToScreen }) => {
+  api.overlay.registerLayer('beacons', ({ ctx, width, height, worldToScreen }) => {
     if (!GAME_SCREENS.has(api.world.getScreen()) || meters.size === 0) return;
 
-    for (const [id, m] of meters) {
-      const enabledHere = active && !disabledConnIds.has(id);
-      const isSelected = id === selectedConnId;
-      const cfg = resolveMeterConfig(id);
-      const head = worldToScreen(m.conn.x, m.conn.y, (m.conn.z || 0) + 3.6);
-      const base = worldToScreen(m.conn.x, m.conn.y, m.conn.z || 0);
-      if (
-        head.depth <= 0.25 ||
-        base.depth <= 0.25 ||
-        !Number.isFinite(head.x) ||
-        !Number.isFinite(head.y) ||
-        !Number.isFinite(base.x) ||
-        !Number.isFinite(base.y)
-      ) {
-        continue;
-      }
-
-      const poleDist = Math.hypot(head.x - base.x, head.y - base.y);
-      if (poleDist > 260) continue;
-
-      // Pole
-      ctx.strokeStyle = isSelected ? '#1d5fbf' : 'rgba(28, 29, 24, 0.85)';
-      ctx.lineWidth = isSelected ? 3 : 2.5;
-      ctx.beginPath();
-      ctx.moveTo(base.x, base.y);
-      ctx.lineTo(head.x, head.y);
-      ctx.stroke();
-
-      // Selection halo
-      if (isSelected) {
-        ctx.strokeStyle = '#3b82f6';
-        ctx.lineWidth = 2.5;
+    // Keep world-space beacons and labels behind HUD panels even when the overlay canvas sits above UI.
+    const exclusions = getUiExclusionRects(ctx);
+    let clipped = false;
+    if (exclusions.length > 0 && typeof ctx.clip === 'function') {
+      const clipW = Number.isFinite(width) && width > 0 ? width : 16384;
+      const clipH = Number.isFinite(height) && height > 0 ? height : 16384;
+      ctx.save();
+      for (const r of exclusions) {
         ctx.beginPath();
-        ctx.roundRect(head.x - 12, head.y - 19, 24, 30, 7);
+        ctx.rect(0, 0, clipW, clipH);
+        if (typeof ctx.roundRect === 'function') {
+          ctx.roundRect(r.left, r.top, r.width, r.height, 14);
+        } else {
+          ctx.rect(r.left, r.top, r.width, r.height);
+        }
+        ctx.clip('evenodd');
+      }
+      clipped = true;
+    }
+
+    try {
+      for (const [id, m] of meters) {
+        const enabledHere = active && !disabledConnIds.has(id);
+        const isSelected = id === selectedConnId;
+        const cfg = resolveMeterConfig(id);
+        const head = worldToScreen(m.conn.x, m.conn.y, (m.conn.z || 0) + 3.6);
+        const base = worldToScreen(m.conn.x, m.conn.y, m.conn.z || 0);
+        if (
+          head.depth <= 0.25 ||
+          base.depth <= 0.25 ||
+          !Number.isFinite(head.x) ||
+          !Number.isFinite(head.y) ||
+          !Number.isFinite(base.x) ||
+          !Number.isFinite(base.y)
+        ) {
+          continue;
+        }
+
+        const poleDist = Math.hypot(head.x - base.x, head.y - base.y);
+        if (poleDist > 260) continue;
+
+        // Pole
+        ctx.strokeStyle = isSelected ? '#1d5fbf' : 'rgba(28, 29, 24, 0.85)';
+        ctx.lineWidth = isSelected ? 3 : 2.5;
+        ctx.beginPath();
+        ctx.moveTo(base.x, base.y);
+        ctx.lineTo(head.x, head.y);
         ctx.stroke();
-      }
 
-      // Signal housing & live red/green lamp
-      ctx.fillStyle = '#181a15';
-      ctx.beginPath();
-      ctx.roundRect(head.x - 9, head.y - 16, 18, 24, 5);
-      ctx.fill();
+        // Selection halo
+        if (isSelected) {
+          ctx.strokeStyle = '#3b82f6';
+          ctx.lineWidth = 2.5;
+          ctx.beginPath();
+          ctx.roundRect(head.x - 12, head.y - 19, 24, 30, 7);
+          ctx.stroke();
+        }
 
-      const greenOn = enabledHere && m.color === 'green';
-      const redOn = enabledHere && m.color !== 'green';
-
-      ctx.fillStyle = redOn ? '#ef4444' : 'rgba(239, 68, 68, 0.22)';
-      ctx.beginPath();
-      ctx.arc(head.x, head.y - 9, 4.2, 0, Math.PI * 2);
-      ctx.fill();
-
-      ctx.fillStyle = greenOn ? '#22c55e' : 'rgba(34, 197, 94, 0.22)';
-      ctx.beginPath();
-      ctx.arc(head.x, head.y + 1, 4.2, 0, Math.PI * 2);
-      ctx.fill();
-
-      // Small blue indicator dot on housing when meter has custom settings
-      if (cfg.hasCustomizations) {
-        ctx.fillStyle = '#3b82f6';
+        // Signal housing & live red/green lamp
+        ctx.fillStyle = '#181a15';
         ctx.beginPath();
-        ctx.arc(head.x - 6, head.y - 13, 2.2, 0, Math.PI * 2);
+        ctx.roundRect(head.x - 9, head.y - 16, 18, 24, 5);
         ctx.fill();
-      }
 
-      if (enabledHere) {
-        ctx.fillStyle = 'rgba(20, 22, 17, 0.84)';
-        ctx.beginPath();
-        ctx.roundRect(head.x + 12, head.y - 12, 46, 17, 5);
-        ctx.fill();
-        ctx.fillStyle = '#fff7e8';
-        ctx.font = '600 10px "Highway UI Mono", ui-monospace, monospace';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(`Q:${m.rampQueue}`, head.x + 35, head.y - 3);
-      }
+        const greenOn = enabledHere && m.color === 'green';
+        const redOn = enabledHere && m.color !== 'green';
 
-      if (isSelected) {
-        const tag = formatMeterLabel(id, cfg);
-        ctx.fillStyle = 'rgba(29, 95, 191, 0.92)';
+        ctx.fillStyle = redOn ? '#ef4444' : 'rgba(239, 68, 68, 0.22)';
         ctx.beginPath();
-        ctx.roundRect(head.x - 36, head.y - 38, 72, 16, 5);
+        ctx.arc(head.x, head.y - 9, 4.2, 0, Math.PI * 2);
         ctx.fill();
-        ctx.fillStyle = '#ffffff';
-        ctx.font = '600 10px "Highway UI", system-ui, sans-serif';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(tag.slice(0, 12), head.x, head.y - 30);
+
+        ctx.fillStyle = greenOn ? '#22c55e' : 'rgba(34, 197, 94, 0.22)';
+        ctx.beginPath();
+        ctx.arc(head.x, head.y + 1, 4.2, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Small blue indicator dot on housing when meter has custom settings
+        if (cfg.hasCustomizations) {
+          ctx.fillStyle = '#3b82f6';
+          ctx.beginPath();
+          ctx.arc(head.x - 6, head.y - 13, 2.2, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        if (enabledHere) {
+          ctx.fillStyle = 'rgba(20, 22, 17, 0.84)';
+          ctx.beginPath();
+          ctx.roundRect(head.x + 12, head.y - 12, 46, 17, 5);
+          ctx.fill();
+          ctx.fillStyle = '#fff7e8';
+          ctx.font = '600 10px "Highway UI Mono", ui-monospace, monospace';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(`Q:${m.rampQueue}`, head.x + 35, head.y - 3);
+        }
+
+        if (isSelected) {
+          const tag = formatMeterLabel(id, cfg);
+          ctx.fillStyle = 'rgba(29, 95, 191, 0.92)';
+          ctx.beginPath();
+          ctx.roundRect(head.x - 36, head.y - 38, 72, 16, 5);
+          ctx.fill();
+          ctx.fillStyle = '#ffffff';
+          ctx.font = '600 10px "Highway UI", system-ui, sans-serif';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(tag.slice(0, 12), head.x, head.y - 30);
+        }
+      }
+    } finally {
+      if (clipped) {
+        ctx.restore();
       }
     }
   });
@@ -1243,6 +1314,10 @@ module.exports = function activate(api) {
   api.input.onPointerDown((e) => {
     if (e.button !== 0 || !GAME_SCREENS.has(api.world.getScreen())) return;
     if ((e.target instanceof Element) && e.target.tagName !== 'CANVAS') return;
+    const exclusions = getUiExclusionRects(null);
+    if (exclusions.some((r) => e.clientX >= r.viewLeft && e.clientX <= r.viewRight && e.clientY >= r.viewTop && e.clientY <= r.viewBottom)) {
+      return;
+    }
     for (const [id, m] of meters) {
       const head = api.world.worldToScreen(m.conn.x, m.conn.y, (m.conn.z || 0) + 3.6);
       if (head.depth <= 0.25 || !Number.isFinite(head.x) || !Number.isFinite(head.y)) continue;
