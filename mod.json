@@ -1,0 +1,11 @@
+{
+  "id": "MOD_HIGHWAYSCO_RAMPMETER",
+  "name": "Highway Ramp Meters",
+  "version": "1.0.0",
+  "author": "highways-modding-example",
+  "description": "Adaptive ALINEA-style ramp metering that detects highway merge ramps, pulses red/green stop signals synced with the physics sim, and displays live queue & mainline occupancy.",
+  "apiVersion": 1,
+  "entry": "index.js",
+  "tags": ["traffic", "signals", "highway", "ramp-meter"],
+  "permissions": ["world", "sim", "overlay", "ui", "input", "storage"]
+}
